@@ -1,0 +1,5 @@
+six>=1.10.0
+requests>=2.9.1
+jsonschema>=2.5.1
+sqlalchemy>=1.1.0b1
+tornado>=4.3

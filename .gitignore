@@ -137,3 +137,10 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+.idea
+.svn
+bak/
+lib/
+logs/
+tests/

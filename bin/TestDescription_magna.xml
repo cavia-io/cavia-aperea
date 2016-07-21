@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<description>
+    <summary>Magna Restful API Test</summary>
+
+    <report sendout="false" attempt="3" smtpserver="172.25.0.3" sender="yale.yang@hotmail.com" receivers="yale.yang@hotmail.com" />
+
+    <testrunner>
+        <context>
+            <fixture name="test" type="magna">
+                <MagnaSession resturl="http://localhost:8080/magna/rest/" username="admin" password="admin"/>
+            </fixture>
+        </context>
+        <testsuites>
+            <!--<testsuite name="magna.rest.test_node" xmlns="ngta/schema/testsuite">-->
+            <testsuite name="magna.rest.test_node">
+                <pym-loader module="cases.magna.rest.test_node" as-testsuite="false">
+                    <filter>
+                        <include>TestNodeGetTestCase</include>
+                        <!--<include>test__post_with_description</include>-->
+                        <!--<include>TestProjectNotFoundTestCase.test__delete</include>-->
+                    </filter>
+                    <define>
+                        <parameter name="loop1" value="1111"/>
+                        <parameter name="loop2" value="2222"/>
+                        <parameter name="loop3" value="3333"/>
+                        <!--<injection path="TestNodeGetTestCase">-->
+                            <!--<parameter name="loop1" value="123"/>-->
+                            <!--<parameter name="loop2" value="456"/>-->
+                            <!--<parameter name="loop3" value="789"/>-->
+                        <!--</injection>-->
+                    </define>
+                </pym-loader>
+            </testsuite>
+        </testsuites>
+    </testrunner>
+</description>

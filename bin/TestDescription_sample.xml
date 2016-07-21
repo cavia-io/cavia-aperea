@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<description>
+    <summary>Test Summary</summary>
+    <report sendout="true" attempt="3" smtpserver="172.25.0.3" sender="yale.yang@hotmail.com" receivers="yale.yang@hotmail.com" />
+
+    <testrunner failfast="false">
+        <context>
+            <objects>
+
+            </objects>
+            <!-- fixture is not required if for some tests not require it.-->
+            <fixture name="BENCH1" type="wireless">
+                <TxUnit name="SRC1">
+                    <Device type="JAX" moduleid="jax_tx" tcpport="40201"/>
+                    <AVProducer type="QD882" host="192.168.1.205"/>
+                    <PSOutlet host="192.168.1.110" outlet="5"/>
+                    <RedRat model="PIONEER_3D_BDP_440"/>
+                </TxUnit>
+                <RxUnit name="SINK1" >
+                    <Device type="JAX" moduleid="jax_rx" tcpport="40202"/>
+                    <AVConsumer name="PANASONIC TV"/>
+                    <PSOutlet host="192.168.1.110" outlet="8"/>
+                    <RedRat model="SAMSUNG_3D_TV_UA46D"/>
+                    <WebCam devnum="0"/>
+                </RxUnit>
+            </fixture>
+        </context>
+        <testsuites>
+            <testsuite name="TestProject restful api test suite">
+                <!--
+                @repeat:            optional, run testcase with repeat times.
+                @as-testsuite:      optional,
+                                        if it is true, load module as testsuite and append into parent testsuite's tests;
+                                        otherwise extend parent testsuite's tests.
+                -->
+                <pym-loader module="cases.magna.rest.test_project" repeat="1" as-testsuite="false">
+                    <filter>
+                        <exclude>TestProjectsTestCase.test__post_with_name_too_long</exclude>
+                    </filter>
+                    <define>
+                        <parameter name="id" value="123"/>
+                        <parameter name="name" value="test__post_without_description"/>
+                        <injection path="TestProjectNotFoundTestCase">
+                            <parameter name="id" value="123"/>
+                        </injection>
+                    </define>
+                </pym-loader>
+                <xml-loader filename="suites/test_suite.xml" as-testsuite="false">
+                    <define>
+                        <parameter name="listen_keyword" value="AV Mute OFF"/>
+                        <parameter name="device" value="TestContextManager.current_context().fixture.devices.receiver"/>
+                    </define>
+                </xml-loader>
+            </testsuite>
+
+            <testsuite name="Factory Test Suite">
+                <for iter="range(1,11)" type="expression" param="pline" >
+                    <testsuite name="Factory Test Suite Product Line %(pline)s">
+                        <testcase class="cases.factory.GoldenUnitTestCase" method="test_fm_set_golden" is-prerequisite="true">
+                            <parameter name="pline" value="%(pline)s"/>
+                        </testcase>
+                        <for iter="range(10)" type="expression">
+                            <testcase class="cases.factory.DUTTestCase" method="test_dut">
+                                <parameter name="pline" value="%(pline)s"/>
+                            </testcase>
+                        </for>
+                    </testsuite>
+                </for>
+            </testsuite>
+        </testsuites>
+    </testrunner>
+</description>

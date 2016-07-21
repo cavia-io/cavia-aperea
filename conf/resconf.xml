@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<resconfig>
+    <testfixtures>
+        <testfixture name="TB-SAMPLE1" type="magna">
+            <MagnaSession resturl="http://localhost:8080/magna/rest/" username="admin" password="admin"/>
+        </testfixture>
+
+        <testfixture name="TB-SAMPLE2" type="magna">
+            <MagnaSession resturl="http://localhost:8080/magna/rest/" username="admin" password="admin"/>
+        </testfixture>
+    </testfixtures>
+</resconfig>
