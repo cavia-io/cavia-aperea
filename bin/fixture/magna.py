@@ -2,6 +2,7 @@
 
 from ngta import BaseTestFixture
 
+import pickle
 import logging
 import requests
 import requests.auth
@@ -45,3 +46,19 @@ class TestFixture(BaseTestFixture):
     def on_testrunner_stop(self, testrunner):
         # resource = TestContextManager.current_context().resource
         self.session.close()
+
+
+class NewTestFixture(BaseTestFixture):
+    def __init__(self):
+        # The conf should can be pickleable, otherwise it can't be attach with TestRunner in another process.
+        super(NewTestFixture, self).__init__()
+        self.session = None
+
+    def on_testrunner_start(self, testrunner):
+        self.session.auth = requests.auth.HTTPBasicAuth(self.session.username, self.session.password)
+        self.session.headers.update({"Content-Type": "application/json;charset=UTF-8"})
+
+    def on_testrunner_stop(self, testrunner):
+        # resource = TestContextManager.current_context().resource
+        self.session.close()
+

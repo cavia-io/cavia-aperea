@@ -21,8 +21,8 @@ from jsonschema import validate, ValidationError
 
 import common
 from ngta import ProcessTestRunner, TestContext, BaseTestFixture
-from ngta import TestRunnerLogFileInterceptor, TestCaseLogFileInterceptor
-from ngta import DEFAULT_LOG_LAYOUT
+from ngta.listener import TestRunnerLogFileInterceptor, TestCaseLogFileInterceptor
+from ngta.trace import DEFAULT_LOG_LAYOUT
 from ngta.util import XmlSetting
 from fixture import TestFixtureFactory
 
@@ -391,7 +391,7 @@ class ExecuteWorker(threading.Thread):
         context = TestContext()
         if resource:
             context.resource = resource
-        runner = ProcessTestRunner(execution.id, execution.failfast, context)
+        runner = ProcessTestRunner(execution.id, execution.failfast, context, auto_exit=True)
 
         log_dir = os.path.join(common.LOG_DIR, "%s_r%d" % (time.strftime("%Y-%m-%d_%H-%M-%S"), execution.id))
         listeners = []
@@ -418,13 +418,12 @@ class ExecuteWorker(threading.Thread):
             living_runners = {}
             for ident, runner in self.__runners.items():
                 state = runner.state
-                logger.debug("<ProcessTestRunner(id:%d, process_id:%d, state:%s)>", runner.id, runner.ident, state.name)
+                logger.debug("<ProcessTestRunner(id:%d, pid:%d, state:%s)>", runner.id, runner.ident, state.name)
                 if state in (runner.State.ABORTED, runner.State.UNEXPECT, runner.State.FINISHED):
                     bench = session.query(TestFixture)\
                                    .join(TestExecution, TestFixture.name == TestExecution.rsrcname)\
                                    .filter(TestExecution.id == ident).one()
                     bench.state = BaseTestFixture.State.IDLE.value
-                    runner.exit()       # for process test runner, call exit().
                 else:
                     living_runners[ident] = runner
                 stmt = TestExecution.__table__.update().where(TestExecution.id == ident).values(state=state.value)

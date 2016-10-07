@@ -5,7 +5,7 @@
 * 生成本地shelve文件
 
 **配置XML**
-参考：./bin/TestDescription_sample.xml
+参考：./bin/TestDescription_*.xml
 ---------------------------------------
 
 
@@ -48,7 +48,7 @@
         <tr>
             <td>/rest/testexecutions/(id)</td>
             <td>PUT</td>
-            <td>在testexecution还未执行室，更新testexecution。<br/>在执行时，支持action查询参数(pause, resume, abort)进行操作。</td>
+            <td>在testexecution还未执行时，更新testexecution。<br/>在执行时，支持action查询参数(pause, resume, abort)进行操作。</td>
         </tr>
         <tr>
             <td>/rest/testexecutions/(id)</td>

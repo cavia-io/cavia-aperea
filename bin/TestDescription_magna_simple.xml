@@ -1,17 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <description>
+    <!-- displayed in report -->
     <summary>Magna Restful API Test</summary>
 
-    <report sendout="false" attempt="3" smtpserver="172.25.0.3" sender="yale.yang@hotmail.com" receivers="yale.yang@hotmail.com" />
+    <!-- displayed in report -->
+    <tester>yale.yang@hotmail.com</tester>
 
     <testrunner>
         <context>
+            <!-- fixture 'magna' must be implemented under ./fixture folder. so it will be called by TestFixtureFactory. -->
             <fixture name="test" type="magna">
                 <MagnaSession resturl="http://localhost:8080/magna/rest/" username="admin" password="admin"/>
             </fixture>
         </context>
         <testsuites>
-            <!--<testsuite name="magna.rest.test_node" xmlns="ngta/schema/testsuite">-->
             <testsuite name="magna.rest.test_node">
                 <pym-loader module="cases.magna.rest.test_node" as-testsuite="false">
                     <filter>
