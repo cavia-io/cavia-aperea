@@ -8,6 +8,7 @@ import pydoc
 import threading
 import collections
 import sqlalchemy
+import pysvn
 
 from xml.etree import ElementTree as etree
 from contextlib import contextmanager
@@ -19,17 +20,19 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from jsonschema import validate, ValidationError
 
+
 import common
 from ngta import ProcessTestRunner, TestContext, BaseTestFixture
 from ngta.listener import TestRunnerLogFileInterceptor, TestCaseLogFileInterceptor
 from ngta.trace import DEFAULT_LOG_LAYOUT
-from ngta.util import XmlSetting
+from ngta.util import XmlSetting, generate_hierarchy_from_module
 from fixture import TestFixtureFactory
 
 import logging
 import logging.config
 logger = logging.getLogger(__name__)
 
+CACHE_DIR = os.path.join(common.ROOT_DIR, "cache")
 RES_CONF = os.path.join(common.CFG_DIR, "resconf.xml")
 BaseModel = declarative_base()
 
@@ -276,6 +279,55 @@ class TestExecutionDetailResource(BaseResource):
             self.set_status(404)
 
 
+class TestHierarchyResource(BaseResource):
+    def get(self):
+        try:
+            url = self.get_query_argument("url")
+            type = self.get_query_argument("type", default="svn")
+            username = self.get_query_argument("username", default=None)
+            password = self.get_query_argument("password", default=None)
+        except web.MissingArgumentError:
+            self.set_status(400)
+        else:
+            client = pysvn.Client()
+            client.exception_style = 1
+            # _ indicate: (realm, username, may_save)
+            client.callback_get_login = lambda _: (True, username, password, True)
+
+            if not client.is_url(url):
+                self.set_status(404)
+                return self.finish()
+
+            location = None
+            for child in os.listdir(common.CASE_DIR):
+                path = os.path.join(common.CASE_DIR, child)
+                try:
+                    entry = client.info(path)
+                except pysvn.ClientError:
+                    continue
+                else:
+                    if entry.url == url:
+                        location = path
+            try:
+                if location:
+                    server_revision = client.revpropget("revision", url=url)[0].number
+                    native_revision = client.info(location).revision
+                    if server_revision > native_revision:
+                        logger.info("server revision %s is greater than native revision %s, do update.",
+                                    server_revision, native_revision)
+                        client.update(location)
+                else:
+                    repo = url.rpartition("/")[2]
+                    location = os.path.join(common.CASE_DIR, repo)
+                    client.checkout(url, location)
+                hierarchy = generate_hierarchy_from_module('cases.magna')
+                self.finish(hierarchy)
+            except (pysvn.ClientError, ImportError) as err:
+                logger.exception("")
+                self.set_status(500)
+                self.finish({"message": str(err)})
+
+
 class CleanupWorker(threading.Thread):
     __instance = None
     __lock = threading.Lock()
@@ -519,7 +571,7 @@ class SrvSetting(XmlSetting):
         super(SrvSetting, self).__init__(xml)
         for element in list(self._tree.xpath("/testagent/definitions")[0]):
             name, value = self._parse_buildin_type_element(element)
-            self._objects[name] = value
+            self._container[name] = value
 
     def get_listeners(self):
         listeners = []
@@ -544,9 +596,10 @@ class Application(web.Application):
     def __init__(self, scoped_session):
         self.scoped_session = scoped_session
         handlers = [
-            (r"/rest/testfixtures", TestFixtureListResource),
-            (r"/rest/testexecutions", TestExecutionListResource),
-            (r"/rest/testexecutions/([0-9]+)", TestExecutionDetailResource),
+            (r"/api/rest/testfixtures", TestFixtureListResource),
+            (r"/api/rest/testexecutions", TestExecutionListResource),
+            (r"/api/rest/testexecutions/([0-9]+)", TestExecutionDetailResource),
+            (r"/api/rest/testhierarchy/?", TestHierarchyResource),
         ]
         web.Application.__init__(self, handlers)
 
@@ -568,7 +621,7 @@ class TestAgent(object):
         self.cleanup_worker = CleanupWorker.instance(
             self._create_scoped_session(),
             self.srv_setting.get_integer("//cleanup-worker/@days_ago", 30),
-            self.srv_setting.get_float("//cleanup-worker/@interval", 1),
+            self.srv_setting.get_float("//cleanup-worker/@interval", 86400),
         )
         self.is_closing = False
 
@@ -637,7 +690,6 @@ class TestAgent(object):
 
 
 def main():
-    import sys
     logconf = {
         'version': 1,
         'disable_existing_loggers': False,

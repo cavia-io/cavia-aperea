@@ -141,6 +141,5 @@ $RECYCLE.BIN/
 .idea
 .svn
 bak/
-lib/
 logs/
 tests/
