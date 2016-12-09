@@ -3,7 +3,7 @@
 import six
 import requests
 from requests.compat import urljoin
-from ngta import TestContextManager, parametrize, skip
+from ngta import TestContextManager, parametrize, skip, name
 from .base import RestBaseTestCase, RestNotFoundTestCase, randstr
 
 import logging
@@ -64,6 +64,7 @@ class TestProjectsTestCase(BaseTestCase):
         self.session = self.fixture.session
         self.url = urljoin(self.session.resturl, "testprojects")
 
+    @name("test1111111111111111")
     @parametrize("name", default=randstr())
     def test__post_without_description(self):
         self._post_and_validate(self.url, self.parameters)

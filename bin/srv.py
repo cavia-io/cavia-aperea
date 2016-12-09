@@ -303,11 +303,14 @@ class TestHierarchyResource(BaseResource):
                 path = os.path.join(common.CASE_DIR, child)
                 try:
                     entry = client.info(path)
+                    logger.debug("Path %s svn info: %s", path, entry)
                 except pysvn.ClientError:
                     continue
                 else:
-                    if entry.url == url:
+                    if entry is not None and entry.url == url:
                         location = path
+                        break
+
             try:
                 if location:
                     server_revision = client.revpropget("revision", url=url)[0].number
@@ -320,7 +323,8 @@ class TestHierarchyResource(BaseResource):
                     repo = url.rpartition("/")[2]
                     location = os.path.join(common.CASE_DIR, repo)
                     client.checkout(url, location)
-                hierarchy = generate_hierarchy_from_module('cases.magna')
+                relative_path = os.path.relpath(location, common.CASE_DIR)
+                hierarchy = generate_hierarchy_from_module('cases.%s' % relative_path.replace(os.path.sep, "."))
                 self.finish(hierarchy)
             except (pysvn.ClientError, ImportError) as err:
                 logger.exception("")
