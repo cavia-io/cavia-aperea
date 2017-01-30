@@ -4,7 +4,7 @@
          xmlns:ngta="ngta">
 
     <str id="summary">Magna Restful API Test</str>
-    <str id="tester">yale.yang@hotmail.com</str>
+    <str id="tester">yyang179@hotmail.com</str>
 
     <str id="output_dir">
         #{os.path.join(os.path.dirname(sys.path[0]), "logs", time.strftime("%Y-%m-%d_%H-%M-%S")); requires=os, sys, time}

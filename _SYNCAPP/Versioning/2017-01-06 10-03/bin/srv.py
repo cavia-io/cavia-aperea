@@ -3,36 +3,29 @@
 import os
 import json
 import time
-import uuid
 import datetime
 import pydoc
 import threading
-import pprint
 import collections
-import multiprocessing
 import sqlalchemy
 import pysvn
-import kombu
 
 from xml.etree import ElementTree as etree
 from contextlib import contextmanager
-from multiprocessing import queues
 from tornado import web, escape, gen, ioloop
 from sqlalchemy import Column
-from sqlalchemy import SmallInteger, Integer, Boolean, String, PickleType, Text, DateTime, TIMESTAMP
+from sqlalchemy import SmallInteger, Integer, Boolean, String, PickleType, Text, DateTime
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import declarative_base
 from jsonschema import validate, ValidationError
 
+
 import common
 from ngta import ProcessTestRunner, TestContext, BaseTestFixture
-from ngta.listener import TestRunnerLogFileInterceptor, TestCaseLogFileInterceptor, TestResultShelveInterceptor
-from ngta.log import DEFAULT_LOG_LAYOUT
-from ngta.util import generate_hierarchy_from_module
-from coupling.util import ComplexJsonEncoder
-from coupling.conf import XmlSetting
+from ngta.listener import TestRunnerLogFileInterceptor, TestCaseLogFileInterceptor
+from ngta.trace import DEFAULT_LOG_LAYOUT
+from ngta.util import XmlSetting, generate_hierarchy_from_module
 from fixture import TestFixtureFactory
 
 import logging
@@ -77,9 +70,7 @@ class TestExecution(BaseModel, Serializer):
     failfast = Column(Boolean, default=False)
     rsrcname = Column(String(255), ForeignKey('testfixture.name'), default=None)
     testsuites = Column(TextPickleType(pickler=json), nullable=False)
-    local_creation_datetime = Column(DateTime, default=datetime.datetime.utcnow)
-    start_datetime = Column(DateTime, default=None)
-    stop_datetime = Column(DateTime, default=None)
+    local_creation_ts = Column(DateTime, default=datetime.datetime.now)
 
     def __init__(self, id, testsuites, priority=None, failfast=None, rsrcname=None):
         self.id = id
@@ -130,7 +121,7 @@ class BaseResource(web.RequestHandler):
         if self._finished:
             raise RuntimeError("Cannot write() after finish()")
         if isinstance(chunk, dict) or isinstance(chunk, list):
-            chunk = json.dumps(chunk, cls=ComplexJsonEncoder).replace("</", "<\\/")
+            chunk = escape.json_encode(chunk)
             self.set_header("Content-Type", "application/json; charset=UTF-8")
         chunk = escape.utf8(chunk)
         self._write_buffer.append(chunk)
@@ -166,28 +157,23 @@ class TestExecutionListResource(BaseResource):
     }
 
     def get(self):
-        states = self.get_query_arguments("state")
-        ids = self.get_query_arguments("id")
+        args = self.get_query_arguments("state")
         query = self.db.query(TestExecution)
-        conditions = []
-
-        if states:
-            conditions.append(TestExecution.state.in_(states))
-
-        if ids:
-            conditions.append(TestExecution.id.in_(ids))
-
-        if conditions:
-            query = self.db.query(TestExecution).filter(*conditions)
+        if args:
+            query = self.db.query(TestExecution).filter(TestExecution.state.in_(*args))
 
         chunk = []
+        states = ExecuteWorker.instance().get_all_testrunner_states()
         for execution in query.all():
-            chunk.append(execution.as_dict())
+            data = execution.as_dict()
+            if execution.id in states:
+                data["state"] = states[execution.id]
+            data.pop("local_creation_ts")
+            chunk.append(data)
         self.finish(chunk)
 
     def post(self):
         data = self.request.json
-        logger.debug("Create a new TestExecution with data: %s", pprint.pformat(data))
         try:
             validate(data, self.json_schema)
         except ValidationError as err:
@@ -226,7 +212,10 @@ class TestExecutionDetailResource(BaseResource):
     def get(self, ident):
         execution = self.db.query(TestExecution).get(ident)
         if execution:
+            state = ExecuteWorker.instance().get_testrunner_state(ident)
             chunk = execution.as_dict()
+            if state is not None:
+                chunk["state"] = state
             logger.debug("Response Body: %s", chunk)
             self.finish(chunk)
         else:
@@ -235,8 +224,8 @@ class TestExecutionDetailResource(BaseResource):
     def put(self, ident):
         execution = self.db.query(TestExecution).get(ident)
         if execution:
-            action = self.get_query_argument("action", default=None)
-            if action.lower() not in ("pause", "resume", "abort"):
+            action = self.get_query_argument("action", default=None).lower()
+            if action not in ("pause", "resume", "abort"):
                 self.set_status(400)
                 return self.finish({"message": "Action can only be ('pause', 'resume', 'abort')."})
 
@@ -248,7 +237,6 @@ class TestExecutionDetailResource(BaseResource):
                 attr_updated = True
 
             if action is not None:
-                action = action.lower()
                 if execution.state in (ProcessTestRunner.State.RUNNING, ProcessTestRunner.State.SUSPEND):
                     if action == "pause" and execution.state != ProcessTestRunner.State.RUNNING:
                         body = {"message": "Action 'pause' can only be invoked when state is RUNNING."}
@@ -374,10 +362,10 @@ class CleanupWorker(threading.Thread):
         logger.info("*** Cleanup TestExecution Task Begin ***")
         logger.info("days_ago: %d", self.days_ago)
         logger.info("interval: %d", self.interval)
-        current = datetime.datetime.utcnow()
+        current = datetime.datetime.now()
         thirty_days_ago = current - datetime.timedelta(days=self.days_ago)
         with self.session() as session:
-            query = session.query(TestExecution).filter(TestExecution.local_creation_datetime < thirty_days_ago)
+            query = session.query(TestExecution).filter(TestExecution.local_creation_ts < thirty_days_ago)
             count = query.delete()
             logger.info("remove %d rows.", count)
             session.commit()
@@ -399,42 +387,27 @@ class CleanupWorker(threading.Thread):
         logger.info("CleanupWorker exit successfully.")
 
 
-class ExecuteWorker(object):
-    _instance = None
-    _lock = threading.Lock()
+class ExecuteWorker(threading.Thread):
+    __instance = None
+    __lock = threading.Lock()
 
     @classmethod
     def instance(cls, *args, **kwargs):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls(*args, **kwargs)
-        return cls._instance
+        if cls.__instance is None:
+            with cls.__lock:
+                if cls.__instance is None:
+                    cls.__instance = cls(*args, **kwargs)
+        return cls.__instance
 
-    def __init__(self,
-                 scoped_session,
-                 amqp_url, exchange_name, exchange_type, routing_key_pattern,
-                 recover, interval,
-                 listeners=None):
+    def __init__(self, scoped_session, listeners=None, recover=True, interval=5):
         super(ExecuteWorker, self).__init__()
         self.scoped_session = scoped_session
         self.listeners = listeners or []
         self.interval = interval
-        self.recover = recover
-        self._runners = {}
-        self._benches = {}
-
-        self._stop_sync = threading.Event()
-        self._stop_exec = threading.Event()
-        self._state_queue = multiprocessing.JoinableQueue()
-
-        self._amqp_conn = kombu.Connection(amqp_url)
-        exchange = kombu.Exchange(exchange_name, exchange_type, channel=self._amqp_conn, durable=True)
-        exchange.declare()
-        self._amqp_producer = self._amqp_conn.Producer(exchange=exchange, auto_declare=False)
-        self._amqp_routing_key_pattern = routing_key_pattern
-        self._sync_thread = threading.Thread(target=self.__sync_thread_run)
-        self._exec_thread = threading.Thread(target=self.__exec_thread_run)
+        self.__recover = recover
+        self.__runners = {}
+        self.__benches = {}
+        self.__should_stop = threading.Event()
 
     @contextmanager
     def session(self):
@@ -443,12 +416,23 @@ class ExecuteWorker(object):
         finally:
             self.scoped_session.remove()
 
-    def add_testfixture(self, fixture):
-        self._benches[fixture.name] = fixture
+    def add_testfixture(self, bench):
+        self.__benches[bench.name] = bench
 
-    def __recover(self):
+    def get_testrunner_state(self, ident):
+        with self.__lock:
+            if ident in self.__runners:
+                return self.__runners[ident].state.value
+            return None
+
+    def get_all_testrunner_states(self):
+        with self.__lock:
+            states = {ident: runner.state for ident, runner in self.__runners.items()}
+        return states
+
+    def recover(self):
         """
-        All testfixtures' state will set to idle when initialize, so don't check the IDLE state when recovering.
+        All testfixtures' state will set to idle when initialize, so don't check the IDLE state when restore.
         Assign testexecution with rsrcname first.
         """
         state_in = TestExecution.state.in_([0,
@@ -459,149 +443,109 @@ class ExecuteWorker(object):
         conditions = (state_in,)
         self.__assign(conditions)
 
-    def __assign(self, conditions):
-        """
-        # For each TestExecution with state is null,
-        #   * if rsrcname is None, new ProcessTestRunner directly. This is for tests not require a TestFixture.
-        #   * if rsrcname is not None, assign TestFixture to the TestExecution only when TestFixture is IDLE.
-        """
-        with self.session() as session:
-            for execution in session.query(TestExecution).filter(*conditions).order_by(TestExecution.priority).all():
-                logger.info("Assign %s", execution)
-                rsrcname = execution.rsrcname
-                if rsrcname is None:
-                    logger.info("Assign %s -> TestFixture: None", execution)
-                    self.__new_testrunner(execution)
-                else:
-                    bench = session.query(TestFixture) \
-                        .filter(TestFixture.state == BaseTestFixture.State.IDLE, TestFixture.name == rsrcname) \
-                        .one_or_none()
-                    if bench is None:
-                        logger.warn("Can't find IDLE testfixture with name %s ", rsrcname)
-                    else:
-                        logger.info("Assign %s -> TestFixture: %s", execution, bench)
-                        self.__new_testrunner(execution, self._benches[rsrcname])
-                        bench.state = BaseTestFixture.State.BUSY.value
-                session.commit()
-        logger.info("Current live runners: %s", list(self._runners.values()))
-
-    def __new_testrunner(self, execution, fixture=None):
+    def __new_testrunner(self, execution, resource=None):
         context = TestContext()
-        if fixture:
-            context.fixture = fixture
-        runner = ProcessTestRunner(execution.id, execution.failfast, context, state_queue=self._state_queue)
-        with self._lock:
-            self._runners[execution.id] = runner
+        if resource:
+            context.resource = resource
+        runner = ProcessTestRunner(execution.id, execution.failfast, context, auto_exit=True)
+
         log_dir = os.path.join(common.LOG_DIR, "%s_r%d" % (time.strftime("%Y-%m-%d_%H-%M-%S"), execution.id))
         listeners = []
         listeners.extend(self.listeners)
         listeners.append(TestRunnerLogFileInterceptor(log_dir))
         listeners.append(TestCaseLogFileInterceptor(log_dir))
-        listeners.append(TestResultShelveInterceptor(os.path.join(log_dir, "result.shelve")))
-        logger.debug(listeners)
-        for listener in listeners:
+        for listener in self.listeners:
             logger.debug("%s add context listener: %s", runner, listener)
             context.add_listener(listener)
 
         for testsuite in execution.testsuites:
             runner.add_testsuite(testsuite)
         runner.start()
-        execution.state = ProcessTestRunner.State.INITIAL.value
-        execution.start_datetime = datetime.datetime.utcnow()
+        with self.__lock:
+            self.__runners[execution.id] = runner
 
-    def __sync_thread_run(self):
-        while True:
-            try:
-                data = self._state_queue.get_nowait()
-            except queues.Empty:
-                pass
-            else:
-                logger.debug("RECV TestRunner state: {}".format(data))
+    def __sync(self):
+        """
+        # For each runner:
+        #  1. update its state into database.
+        #  2. check if it is stopped, set related bench to idle, and then remove it from runners.
+        """
+        with self.__lock, self.session() as session:
+            living_runners = {}
+            for ident, runner in self.__runners.items():
+                state = runner.state
+                logger.debug("<ProcessTestRunner(id:%d, pid:%d, state:%s)>", runner.id, runner.ident, state.name)
+                if state in (runner.State.ABORTED, runner.State.UNEXPECT, runner.State.FINISHED):
+                    bench = session.query(TestFixture)\
+                                   .join(TestExecution, TestFixture.name == TestExecution.rsrcname)\
+                                   .filter(TestExecution.id == ident).one()
+                    bench.state = BaseTestFixture.State.IDLE.value
+                else:
+                    living_runners[ident] = runner
+                stmt = TestExecution.__table__.update().where(TestExecution.id == ident).values(state=state.value)
+                session.execute(stmt)
+            session.commit()
+            self.__runners = living_runners
+            logger.info("Current live runners: %s", list(self.__runners.values()))
 
-                s = json.dumps(data, cls=ComplexJsonEncoder)
-
-                self._amqp_producer.publish(
-                    s,
-                    routing_key=self._amqp_routing_key_pattern.format(node=uuid.getnode(), id=data["id"]),
-                    retry=True,
-                    delivery_mode=2,
-                    content_type="application/json",
-                    content_encoding="utf-8"
-                )
-
-                with self._lock, self.session() as session:
-                    ident = data["id"]
-                    state = data["state"]
-                    runner = self._runners.get(ident)
-                    if runner is not None:
-                        stop_datetime = None
-                        if state in (runner.State.ABORTED, runner.State.UNEXPECT, runner.State.FINISHED):
-                            stop_datetime = datetime.datetime.utcnow()
-                            bench = session.query(TestFixture) \
-                                .join(TestExecution, TestFixture.name == TestExecution.rsrcname) \
-                                .filter(TestExecution.id == ident).one()
-                            bench.state = BaseTestFixture.State.IDLE.value
-                            del self._runners[ident]
-                            runner.join()
-                            logger.debug("%s is stopped, remove and join it.", runner)
-
-                        stmt = TestExecution.__table__ \
-                            .update() \
-                            .where(TestExecution.id == ident) \
-                            .values(state=state, stop_datetime=stop_datetime)
-                        session.execute(stmt)
+    def __assign(self, conditions):
+        """
+        # For each TestExecution with state is 0,
+        #   * if rsrcname is None, new ProcessTestRunner directly. This is for tests not require a TestFixture.
+        #   * if rsrcname is not None, assign TestFixture to the TestExecution only when TestFixture is IDLE.
+        """
+        with self.session() as session:
+            for execution in session.query(TestExecution).filter(*conditions).all():
+                rsrcname = execution.rsrcname
+                if rsrcname is None:
+                    logger.info("Assign %s -> None", execution)
+                    self.__new_testrunner(execution)
+                else:
+                    bench = session.query(TestFixture)\
+                                   .filter(TestFixture.state == BaseTestFixture.State.IDLE, TestFixture.name == rsrcname)\
+                                   .one_or_none()
+                    if bench is None:
+                        logger.error("Can't find testfixture with name %s", rsrcname)
+                    else:
+                        logger.info("Assign %s -> %s", execution, bench)
+                        self.__new_testrunner(execution, self.__benches[rsrcname])
+                        bench.state = BaseTestFixture.State.BUSY.value
                         session.commit()
-                self._state_queue.task_done()
-            finally:
-                if self._stop_sync.wait(0.1):
-                    break
 
-    def __exec_thread_run(self):
-        while True:
-            self.__assign((TestExecution.state == 0, ))
-            if self._stop_exec.wait(self.interval):
-                break
+    def run_once(self):
+        self.__sync()
+        self.__assign((TestExecution.state == 0, ))
 
     def run(self):
-        if self.recover:
-            self.__recover()
+        if self.__recover:
+            self.recover()
 
-        self._stop_sync.clear()
-        self._stop_exec.clear()
-        self._sync_thread.start()
-        self._exec_thread.start()
-
-    def start(self):
-        self.run()
+        self.__should_stop.clear()
+        while True:
+            self.run_once()
+            if self.__should_stop.wait(self.interval):
+                break
 
     def invoke(self, testexecution_id, action):
-        with self._lock:
-            runner = self._runners.get(testexecution_id)
+        with self.__lock:
+            runner = self.__runners.get(testexecution_id)
             if runner:
-                try:
-                    getattr(runner, action)()
-                    return True
-                except runner.PipeCallError as err:
-                    logger.error(str(err))
+                getattr(runner, action)()
+                return True
             return False
 
-    def stop(self):
-        self._stop_exec.set()
-        self._exec_thread.join()
-
-        with self._lock:
-            for runner in self._runners.values():
-                logger.debug("Abort %s.", runner)
-                try:
-                    runner.abort()
-                except runner.PipeCallError as err:
-                    logger.error(str(err))
-                finally:
-                    runner.join()
-        self._state_queue.join()
-        self._stop_sync.set()
-        self._sync_thread.join()
-        self._amqp_conn.close()
+    def stop(self, wait=True):
+        """
+        don't update testexecution and testfixture state in database. Keep the states for restore purpose.
+        """
+        self.__should_stop.set()
+        with self.__lock:
+            for runner in self.__runners.values():
+                logger.debug("Call %s exit.", runner)
+                runner.exit()       # for process test runner, call exit().
+        if wait:
+            logger.debug("Waiting for ExecuteWorker join().")
+            self.join()
         logger.info("ExecuteWorker exit successfully.")
 
 
@@ -673,13 +617,9 @@ class TestAgent(object):
 
         self.execute_worker = ExecuteWorker.instance(
             self._create_scoped_session(),
-            self.srv_setting.get("//execute-worker/@amqp_url"),
-            self.srv_setting.get("//execute-worker/@exchange_name", "ngta.runner.topic"),
-            self.srv_setting.get("//execute-worker/@exchange_type", "topic"),
-            self.srv_setting.get("//execute-worker/@routing_key_pattern", "%(node)s.execution.%(id)s"),
-            self.srv_setting.get_boolean("//execute-worker/@recover", True),
-            self.srv_setting.get_float("//execute-worker/@interval", 5),
             self.srv_setting.get_listeners(),
+            self.srv_setting.get_boolean("//execute-worker/@recover", True),
+            self.srv_setting.get_float("//execute-worker/@interval", 5)
         )
 
         self.cleanup_worker = CleanupWorker.instance(
@@ -687,7 +627,7 @@ class TestAgent(object):
             self.srv_setting.get_integer("//cleanup-worker/@days_ago", 30),
             self.srv_setting.get_float("//cleanup-worker/@interval", 86400),
         )
-        self.exiting = False
+        self.is_closing = False
 
     def init_db(self):
         BaseModel.metadata.create_all(self.engine)
@@ -745,12 +685,12 @@ class TestAgent(object):
         logging.info('TestAgent exit success!')
 
     def _try_exit(self):
-        if self.exiting:
+        if self.is_closing:
             self.shutdown()
 
     def _sigint_handler(self, signum, frame):
         logging.info("Receive SIGINT(%d), exiting...", signum)
-        self.exiting = True
+        self.is_closing = True
 
 
 def main():

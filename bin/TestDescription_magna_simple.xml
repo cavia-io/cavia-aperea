@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <description>
-    <!-- displayed in report -->
-    <summary>Magna Restful API Test</summary>
-
-    <!-- displayed in report -->
-    <tester>yale.yang@hotmail.com</tester>
+    <!--@output attribute is optional-->
+    <report template="" output="">
+        <summary>Dagger Test</summary>
+        <tester>yyang179@hotmail.com</tester>
+    </report>
 
     <testrunner>
         <context>

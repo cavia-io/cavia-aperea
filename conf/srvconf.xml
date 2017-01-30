@@ -2,23 +2,32 @@
 <testagent>
     <definitions>
         <str id="AMQP_URL">amqp://guest:guest@localhost:5672</str>
+        <str id="REDIS_URL">redis://localhost:6379</str>
     </definitions>
 
     <sqlalchemy url="sqlite:///srv.db"/>
     <webapp>
-        <listen port="9090" host="0.0.0.0" />
+        <listen port="19090" host="0.0.0.0" />
     </webapp>
     <workers>
         <cleanup-worker days_ago="30" interval="86400"/>
-        <execute-worker interval="5" recover="false">
+        <execute-worker interval="5"
+                        recover="false"
+                        amqp_url="${AMQP_URL}"
+                        exchange_name="ngta.runner.topic"
+                        exchange_type="topic"
+                        routing_key_pattern="{node}.execution.{id}">
             <listeners>
-                <listener class="ngta.listener.TestRunnerLogAmqpInterceptor">
-                    <constructor-arg name="url" ref="AMQP_URL"/>
-                    <constructor-arg name="exchange_name" value="ngta.logging"/>
-                    <constructor-arg name="exchange_type" value="direct"/>
+                <listener class="ngta.listener.TestRunnerLogRedisInterceptor">
+                    <constructor-arg name="url" value="${REDIS_URL}"/>
+                    <constructor-arg name="db" value="0"/>
+                </listener>
+                <listener class="ngta.listener.TestCaseLogRedisInterceptor">
+                    <constructor-arg name="url" value="${REDIS_URL}"/>
+                    <constructor-arg name="db" value="1"/>
                 </listener>
                 <listener class="ngta.listener.TestRecordAmqpInterceptor">
-                    <constructor-arg name="url" ref="AMQP_URL"/>
+                    <constructor-arg name="url" value="${AMQP_URL}"/>
                     <constructor-arg name="queue_name" value="ngta.record"/>
                 </listener>
             </listeners>
