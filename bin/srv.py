@@ -69,10 +69,14 @@ class Serializer(object):
 
 
 class TestExecution(BaseModel, Serializer):
+    class State(ProcessTestRunner.State):
+        SUBMITTED = 2
+        ASSIGNED = 3
+
     __tablename__ = 'testexecution'
 
     id = Column(Integer, primary_key=True)
-    state = Column(SmallInteger, default=0)
+    state = Column(SmallInteger, default=State.SUBMITTED)
     priority = Column(Integer, default=1)
     failfast = Column(Boolean, default=False)
     rsrcname = Column(String(255), ForeignKey('testfixture.name'), default=None)
@@ -223,6 +227,8 @@ class TestExecutionDetailResource(BaseResource):
         "additionalProperties": False
     }
 
+    actions = ("pause", "resume", "abort", "rerun")
+
     def get(self, ident):
         execution = self.db.query(TestExecution).get(ident)
         if execution:
@@ -236,12 +242,14 @@ class TestExecutionDetailResource(BaseResource):
         execution = self.db.query(TestExecution).get(ident)
         if execution:
             action = self.get_query_argument("action", default=None)
-            if action.lower() not in ("pause", "resume", "abort"):
+            if action is not None and action.lower() not in self.actions:
                 self.set_status(400)
-                return self.finish({"message": "Action can only be ('pause', 'resume', 'abort')."})
+                return self.finish({"message": "Action can only be {}.".format(self.actions)})
 
             attr_updated = False
-            if execution.state in (None, ProcessTestRunner.State.INITIAL, ProcessTestRunner.State.PENDING):
+            if execution.state in (TestExecution.State.SUBMITTED,
+                                   TestExecution.State.ASSIGNED,
+                                   TestExecution.State.INITIAL):
                 for key, value in self.request.json.items():
                     setattr(execution, key, value)
                 self.db.commit()
@@ -249,12 +257,12 @@ class TestExecutionDetailResource(BaseResource):
 
             if action is not None:
                 action = action.lower()
-                if execution.state in (ProcessTestRunner.State.RUNNING, ProcessTestRunner.State.SUSPEND):
-                    if action == "pause" and execution.state != ProcessTestRunner.State.RUNNING:
+                if execution.state in (TestExecution.State.RUNNING, TestExecution.State.SUSPEND):
+                    if action == "pause" and execution.state != TestExecution.State.RUNNING:
                         body = {"message": "Action 'pause' can only be invoked when state is RUNNING."}
                         self.set_status(409)
                         return self.finish(body)
-                    if action == "resume" and execution.state != ProcessTestRunner.State.SUSPEND:
+                    if action == "resume" and execution.state != TestExecution.State.SUSPEND:
                         body = {"message": "Action 'resume' can only be invoked when state is SUSPEND."}
                         self.set_status(409)
                         return self.finish(body)
@@ -267,7 +275,21 @@ class TestExecutionDetailResource(BaseResource):
                         self.set_status(404)
                         self.finish({"message": "Can't find id(%d) in testrunner list." % ident})
                 else:
-                    body = {"message": "Action can only be invoked when state is RUNNING or SUSPEND."}
+                    if action == "rerun":
+                        if execution.state in (TestExecution.State.ABORTED,
+                                               TestExecution.State.UNEXPECT,
+                                               TestExecution.State.FINISHED):
+                            execution.state = TestExecution.State.SUBMITTED
+                            self.db.commit()
+                            self.set_status(204)
+                            self.finish()
+                        else:
+                            body = {
+                                "message": "Action 'rerun' can only be invoked when state is ABORTED, UNEXPECT or FINISHED."
+                            }
+                            self.set_status(409)
+                            return self.finish(body)
+                    body = {"message": "Action can't be invoked because state is not match with the requirement."}
                     self.set_status(409)
                     self.finish(body)
             else:
@@ -451,11 +473,11 @@ class ExecuteWorker(object):
         All testfixtures' state will set to idle when initialize, so don't check the IDLE state when recovering.
         Assign testexecution with rsrcname first.
         """
-        state_in = TestExecution.state.in_([0,
-                                            ProcessTestRunner.State.INITIAL,
-                                            ProcessTestRunner.State.PENDING,
-                                            ProcessTestRunner.State.RUNNING,
-                                            ProcessTestRunner.State.SUSPEND])
+        state_in = TestExecution.state.in_([TestExecution.State.SUBMITTED,
+                                            TestExecution.State.ASSIGNED,
+                                            TestExecution.State.INITIAL,
+                                            TestExecution.State.RUNNING,
+                                            TestExecution.State.SUSPEND])
         conditions = (state_in,)
         self.__assign(conditions)
 
@@ -506,7 +528,7 @@ class ExecuteWorker(object):
         for testsuite in execution.testsuites:
             runner.add_testsuite(testsuite)
         runner.start()
-        execution.state = ProcessTestRunner.State.INITIAL.value
+        execution.state = TestExecution.State.ASSIGNED
         execution.start_datetime = datetime.datetime.utcnow()
 
     def __sync_thread_run(self):
@@ -558,7 +580,7 @@ class ExecuteWorker(object):
 
     def __exec_thread_run(self):
         while True:
-            self.__assign((TestExecution.state == 0, ))
+            self.__assign((TestExecution.state == TestExecution.State.ASSIGNED, ))
             if self._stop_exec.wait(self.interval):
                 break
 

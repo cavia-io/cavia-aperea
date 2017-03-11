@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <testagent>
     <definitions>
-        <str id="AMQP_URL">amqp://guest:guest@localhost:5672</str>
-        <str id="REDIS_URL">redis://localhost:6379</str>
+        <str id="AMQP_URL">amqp://guest:guest@RABBITMQ_SS_CL:5672</str>
+        <str id="REDIS_URL">redis://REDIS_SS_CL:6379</str>
     </definitions>
 
     <sqlalchemy url="sqlite:///srv.db"/>
