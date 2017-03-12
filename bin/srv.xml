@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<service>
+    <!-- https://github.com/kohsuke/winsw -->
+    <id>aperea_srv</id>
+    <name>aperea_srv</name>
+    <description>aperea server</description>
+    <executable>python</executable>
+    <startargument>srv.py</startargument>
+    <interactive />
+    <!--<startmode>Automatic</startmode>-->
+    <stopparentprocessfirst>true</stopparentprocessfirst>
+    <!--<logpath>../logs</logpath>-->
+    <log mode="roll-by-size">
+        <sizeThreshold>10240</sizeThreshold>
+        <keepFiles>8</keepFiles>
+    </log>
+</service>
