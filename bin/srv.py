@@ -7,19 +7,13 @@ import uuid
 import datetime
 import pydoc
 import threading
-import importlib
 import pprint
 import collections
 import multiprocessing
-
-import six
+import sqlalchemy
 import pysvn
 import kombu
-import requests
-import sqlalchemy
 
-from abc import ABCMeta, abstractproperty
-from requests.compat import urljoin
 from xml.etree import ElementTree as etree
 from contextlib import contextmanager
 from multiprocessing import queues
@@ -37,7 +31,7 @@ from ngta import ProcessTestRunner, TestContext, BaseTestFixture
 from ngta.listener import TestRunnerLogFileInterceptor, TestCaseLogFileInterceptor, TestResultShelveInterceptor
 from ngta.log import DEFAULT_LOG_LAYOUT
 from ngta.util import generate_hierarchy_from_module
-from coupling.util import ComplexJsonEncoder, get_boolean_from_string, rreload
+from coupling.util import ComplexJsonEncoder
 from coupling.conf import XmlSetting
 from fixture import TestFixtureFactory
 
@@ -48,51 +42,6 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = os.path.join(common.ROOT_DIR, "cache")
 RES_CONF = os.path.join(common.CFG_DIR, "resconf.xml")
 BaseModel = declarative_base()
-
-
-def get_svn_module(url, basedir, username=None, password=None, vs_update=True):
-    client = pysvn.Client()
-    client.exception_style = 1
-    # _ indicate: (realm, username, may_save)
-    client.callback_get_login = lambda _: (True, username, password, True)
-
-    location = None
-    for child in os.listdir(basedir):
-        path = os.path.join(basedir, child)
-        try:
-            entry = client.info(path)
-
-        except pysvn.ClientError:
-            continue
-        else:
-            if entry is not None and entry.url == url:
-                location = path
-
-                break
-
-    try:
-        if location:
-            logger.debug("Found '%s' with svn url: %s", location, url)
-            if vs_update:
-                server_revision = client.revpropget("revision", url=url)[0].number
-                native_revision = client.info(location).revision.number
-                logger.debug("server revision: %s", server_revision)
-                logger.debug("native revision: %s", native_revision)
-                if server_revision > native_revision:
-                    logger.info("server revision %s is greater than native revision %s, do svn update.",
-                                server_revision, native_revision)
-                    client.update(location)
-        else:
-            logger.debug("Can't find local dir with svn url: %s, do svn checkout.", url)
-            repo = url.rpartition("/")[2]
-            location = os.path.join(basedir, repo)
-            client.checkout(url, location)
-        relative_path = os.path.relpath(location, basedir)
-        module_path = '%s.%s' % (os.path.basename(basedir), relative_path.replace(os.path.sep, "."))
-        module = importlib.import_module(module_path)
-        return module
-    except pysvn.ClientError:
-        logger.exception("")
 
 
 class TextPickleType(PickleType):
@@ -298,23 +247,19 @@ class TestExecutionDetailResource(BaseResource):
                 return self.finish({"message": "Action can only be {}.".format(self.actions)})
 
             attr_updated = False
-            data = self.request.json
             if execution.state in (TestExecution.State.SUBMITTED,
                                    TestExecution.State.ASSIGNED,
-                                   TestExecution.State.INITIAL) and data is not None:
-                for key, value in data.items():
+                                   TestExecution.State.INITIAL):
+                for key, value in self.request.json.items():
                     setattr(execution, key, value)
                 self.db.commit()
                 attr_updated = True
 
             if action is not None:
                 action = action.lower()
-                if execution.state in (TestExecution.State.INITIAL,
-                                       TestExecution.State.RUNNING,
-                                       TestExecution.State.SUSPEND):
-                    if action == "pause" and execution.state not in (TestExecution.State.INITIAL,
-                                                                     TestExecution.State.RUNNING):
-                        body = {"message": "Action 'pause' can only be invoked when state is INITIAL or RUNNING."}
+                if execution.state in (TestExecution.State.RUNNING, TestExecution.State.SUSPEND):
+                    if action == "pause" and execution.state != TestExecution.State.RUNNING:
+                        body = {"message": "Action 'pause' can only be invoked when state is RUNNING."}
                         self.set_status(409)
                         return self.finish(body)
                     if action == "resume" and execution.state != TestExecution.State.SUSPEND:
@@ -325,10 +270,10 @@ class TestExecutionDetailResource(BaseResource):
                     called = ExecuteWorker.instance().invoke(ident, action)
                     if called:
                         self.set_status(204)
-                        return self.finish()
+                        self.finish()
                     else:
                         self.set_status(404)
-                        return self.finish({"message": "Can't find id({}) in testrunner list.".format(ident)})
+                        self.finish({"message": "Can't find id(%d) in testrunner list." % ident})
                 else:
                     if action == "rerun":
                         if execution.state in (TestExecution.State.ABORTED,
@@ -337,7 +282,7 @@ class TestExecutionDetailResource(BaseResource):
                             execution.state = TestExecution.State.SUBMITTED
                             self.db.commit()
                             self.set_status(204)
-                            return self.finish()
+                            self.finish()
                         else:
                             body = {
                                 "message": "Action 'rerun' can only be invoked when state is ABORTED, UNEXPECT or FINISHED."
@@ -346,19 +291,17 @@ class TestExecutionDetailResource(BaseResource):
                             return self.finish(body)
                     body = {"message": "Action can't be invoked because state is not match with the requirement."}
                     self.set_status(409)
-                    return self.finish(body)
+                    self.finish(body)
             else:
                 if attr_updated:
                     self.set_status(204)
-                    return self.finish()
+                    self.finish()
                 else:
-                    body = {"message": "Bad request.".format(ident)}
                     self.set_status(400)
-                    return self.finish(body)
+                    self.finish()
         else:
-            body = {"message": "Can't find TestExecution with id {}.".format(ident)}
             self.set_status(404)
-            return self.finish(body)
+            self.finish()
 
     def delete(self, ident):
         # TODO: abort the execution first, then delete it.
@@ -374,7 +317,7 @@ class TestHierarchyResource(BaseResource):
     def get(self):
         try:
             url = self.get_query_argument("url")
-            vs_update = self.get_query_argument("vs_update", default="false")
+            type = self.get_query_argument("type", default="svn")
             username = self.get_query_argument("username", default=None)
             password = self.get_query_argument("password", default=None)
         except web.MissingArgumentError:
@@ -389,51 +332,51 @@ class TestHierarchyResource(BaseResource):
                 self.set_status(404)
                 return self.finish()
 
+            location = None
+            for child in os.listdir(common.CASE_DIR):
+                path = os.path.join(common.CASE_DIR, child)
+                try:
+                    entry = client.info(path)
+                    logger.debug("Path %s svn info: %s", path, entry)
+                except pysvn.ClientError:
+                    continue
+                else:
+                    if entry is not None and entry.url == url:
+                        location = path
+                        break
+
             try:
-                module = get_svn_module(url, common.CASE_DIR, username, password, get_boolean_from_string(vs_update))
-                rreload(module, pattern="test")
-                hierarchy = generate_hierarchy_from_module(module)
+                if location:
+                    server_revision = client.revpropget("revision", url=url)[0].number
+                    native_revision = client.info(location).revision
+                    if server_revision > native_revision:
+                        logger.info("server revision %s is greater than native revision %s, do update.",
+                                    server_revision, native_revision)
+                        client.update(location)
+                else:
+                    repo = url.rpartition("/")[2]
+                    location = os.path.join(common.CASE_DIR, repo)
+                    client.checkout(url, location)
+                relative_path = os.path.relpath(location, common.CASE_DIR)
+                hierarchy = generate_hierarchy_from_module('cases.%s' % relative_path.replace(os.path.sep, "."))
                 self.finish(hierarchy)
-            except ImportError as err:
+            except (pysvn.ClientError, ImportError) as err:
                 logger.exception("")
                 self.set_status(500)
                 self.finish({"message": str(err)})
 
 
-class BaseWorkerLogFilter(logging.Filter):
-    def __init__(self, worker_cls):
-        super(BaseWorkerLogFilter, self).__init__()
-        self.worker_cls = worker_cls
-
-    def filter(self, record):
-        with getattr(self.worker_cls, "_lock"):
-            obj = getattr(self.worker_cls, "_instance")
-            if obj is None:
-                return False
-            else:
-                return record.thread == obj.ident
-
-
-@six.add_metaclass(ABCMeta)
-class BaseSingleton(object):
-    _instance = None
-
-    @abstractproperty
-    def _lock(self):
-        pass
+class CleanupWorker(threading.Thread):
+    __instance = None
+    __lock = threading.Lock()
 
     @classmethod
     def instance(cls, *args, **kwargs):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls(*args, **kwargs)
-        return cls._instance
-
-
-class CleanupWorker(threading.Thread, BaseSingleton):
-    _lock = threading.Lock()
-    LogFilter = BaseWorkerLogFilter
+        if cls.__instance is None:
+            with cls.__lock:
+                if cls.__instance is None:
+                    cls.__instance = cls(*args, **kwargs)
+        return cls.__instance
 
     def __init__(self, scoped_session, days_ago, interval):
         super(CleanupWorker, self).__init__()
@@ -466,7 +409,8 @@ class CleanupWorker(threading.Thread, BaseSingleton):
         self.__should_stop.clear()
         while True:
             self.run_once()
-            if self.__should_stop.wait(self.interval):
+            is_set = self.__should_stop.wait(self.interval)
+            if is_set:
                 break
 
     def stop(self, wait=True):
@@ -477,23 +421,24 @@ class CleanupWorker(threading.Thread, BaseSingleton):
         logger.info("CleanupWorker exit successfully.")
 
 
-class ExecuteWorker(BaseSingleton):
-    _lock = threading.RLock()   # using RLock because this lock will be acquired multiple times by SAME THREAD.
+class ExecuteWorker(object):
+    _instance = None
+    _lock = threading.Lock()
 
-    class LogFilter(BaseWorkerLogFilter):
-        def filter(self, record):
-            with getattr(self.worker_cls, "_lock"):
-                obj = getattr(self.worker_cls, "_instance")
-                if obj is None:
-                    return False
-                else:
-                    return record.thread in (getattr(obj, "_sync_thread").ident, getattr(obj, "_exec_thread").ident)
+    @classmethod
+    def instance(cls, *args, **kwargs):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls(*args, **kwargs)
+        return cls._instance
 
     def __init__(self,
                  scoped_session,
-                 amqp_url, exchange_name, exchange_type,
+                 amqp_url, exchange_name, exchange_type, routing_key_pattern,
                  recover, interval,
                  listeners=None):
+        super(ExecuteWorker, self).__init__()
         self.scoped_session = scoped_session
         self.listeners = listeners or []
         self.interval = interval
@@ -509,8 +454,9 @@ class ExecuteWorker(BaseSingleton):
         exchange = kombu.Exchange(exchange_name, exchange_type, channel=self._amqp_conn, durable=True)
         exchange.declare()
         self._amqp_producer = self._amqp_conn.Producer(exchange=exchange, auto_declare=False)
-        self._sync_thread = threading.Thread(target=self.__sync_thread_run, name="test")
-        self._exec_thread = threading.Thread(target=self.__exec_thread_run, name="test")
+        self._amqp_routing_key_pattern = routing_key_pattern
+        self._sync_thread = threading.Thread(target=self.__sync_thread_run)
+        self._exec_thread = threading.Thread(target=self.__exec_thread_run)
 
     @contextmanager
     def session(self):
@@ -598,7 +544,7 @@ class ExecuteWorker(BaseSingleton):
 
                 self._amqp_producer.publish(
                     s,
-                    routing_key="node.{}.runner.{}".format(uuid.getnode(), data["id"]),
+                    routing_key=self._amqp_routing_key_pattern.format(node=uuid.getnode(), id=data["id"]),
                     retry=True,
                     delivery_mode=2,
                     content_type="application/json",
@@ -634,7 +580,7 @@ class ExecuteWorker(BaseSingleton):
 
     def __exec_thread_run(self):
         while True:
-            self.__assign((TestExecution.state == TestExecution.State.SUBMITTED, ))
+            self.__assign((TestExecution.state == TestExecution.State.ASSIGNED, ))
             if self._stop_exec.wait(self.interval):
                 break
 
@@ -648,15 +594,9 @@ class ExecuteWorker(BaseSingleton):
         self._exec_thread.start()
 
     def start(self):
-        try:
-            self.run()
-        except:
-            logger.exception("")
-            raise
+        self.run()
 
     def invoke(self, testexecution_id, action):
-        if not isinstance(testexecution_id, int):
-            testexecution_id = int(testexecution_id)
         with self._lock:
             runner = self._runners.get(testexecution_id)
             if runner:
@@ -664,7 +604,7 @@ class ExecuteWorker(BaseSingleton):
                     getattr(runner, action)()
                     return True
                 except runner.PipeCallError as err:
-                    logger.error(err)
+                    logger.error(str(err))
             return False
 
     def stop(self):
@@ -677,7 +617,7 @@ class ExecuteWorker(BaseSingleton):
                 try:
                     runner.abort()
                 except runner.PipeCallError as err:
-                    logger.error(err)
+                    logger.error(str(err))
                 finally:
                     runner.join()
         self._state_queue.join()
@@ -685,85 +625,6 @@ class ExecuteWorker(BaseSingleton):
         self._sync_thread.join()
         self._amqp_conn.close()
         logger.info("ExecuteWorker exit successfully.")
-
-
-class SynchroWorker(threading.Thread, BaseSingleton):
-    _lock = threading.Lock()
-    LogFilter = BaseWorkerLogFilter
-
-    def __init__(self, url, interval, vc_update, passback):
-        super(SynchroWorker, self).__init__()
-        self.url = url
-        self.interval = interval
-        self.vc_update = vc_update
-        self.passback = passback
-        self.__should_stop = threading.Event()
-        self.__headers = {"Content-Type": "application/json;charset=UTF-8"}
-
-    def _passback_testtmplcase_state(self, template):
-        template_id = template["id"]
-        template_class = template["class"]
-        template_method = template["method"]
-        path = "{}.{}".format(template_class, template_method)
-        obj = pydoc.locate(path)
-
-        valid_reverse = False
-        if obj and not template["is_valid"]:
-            logger.debug("Locate %s, current is_valid is False, reverse it.", path)
-            valid_reverse = True
-
-        if not obj and template["is_valid"]:
-            logger.debug("Can't locate %s, current is_valid is True, reverse it.", path)
-            valid_reverse = True
-        if valid_reverse:
-            is_valid = not template["is_valid"]
-            logger.debug("Update is_valid to %s for <TestTmplCase(id:%s, class:%s, method:%s)>",
-                         is_valid, template_id, template_class, template_method)
-            resp = requests.put(
-                urljoin(self.url, "testtmplcases/{}".format(template_id)),
-                json={"is_valid": is_valid},
-                headers=self.__headers
-            )
-            if not resp.ok:
-                logger.error(resp)
-
-    def run_once(self):
-        logger.info("*** Synchro Task Begin ***")
-        try:
-            resp = requests.get(urljoin(self.url, "testprojects"), headers=self.__headers)
-            if resp.ok:
-                for project in resp.json():
-                    if project["repository"]:
-                        logger.debug("Sync for <TestProject(id:%(id)s, name:%(name)s, repository:%(repository)s)>",
-                                     project)
-                        module = get_svn_module(project["repository"], common.CASE_DIR, vs_update=self.vc_update)
-                        rreload(module, pattern="test")
-                        if self.passback:
-                            resp = requests.get(
-                                urljoin(self.url, "testtmplcases"),
-                                params={"testproject_id": project["id"], "is_automated": True},
-                                headers=self.__headers)
-                            if resp.ok:
-                                for template in resp.json():
-                                    self._passback_testtmplcase_state(template)
-        except requests.ConnectionError as err:
-            logger.error(err)
-        finally:
-            logger.info("*** Synchro Task Finish ***")
-
-    def run(self):
-        self.__should_stop.clear()
-        while True:
-            self.run_once()
-            if self.__should_stop.wait(self.interval):
-                break
-
-    def stop(self, wait=True):
-        self.__should_stop.set()
-        if wait:
-            logger.debug("Waiting for SynchroWorker join().")
-            self.join()
-        logger.info("SynchroWorker exit successfully.")
 
 
 class ResSetting(object):
@@ -808,7 +669,6 @@ class SrvSetting(XmlSetting):
                     args.append(value)
 
             cls = pydoc.locate(element.get("class"))
-            logger.debug("Construct %s", cls)
             obj = cls(*args, **kwargs)
             listeners.append(obj)
         return listeners
@@ -838,21 +698,16 @@ class TestAgent(object):
             self.srv_setting.get("//execute-worker/@amqp_url"),
             self.srv_setting.get("//execute-worker/@exchange_name", "ngta.runner.topic"),
             self.srv_setting.get("//execute-worker/@exchange_type", "topic"),
+            self.srv_setting.get("//execute-worker/@routing_key_pattern", "%(node)s.execution.%(id)s"),
             self.srv_setting.get_boolean("//execute-worker/@recover", True),
             self.srv_setting.get_float("//execute-worker/@interval", 5),
             self.srv_setting.get_listeners(),
         )
+
         self.cleanup_worker = CleanupWorker.instance(
             self._create_scoped_session(),
             self.srv_setting.get_integer("//cleanup-worker/@days_ago", 30),
             self.srv_setting.get_float("//cleanup-worker/@interval", 86400),
-        )
-
-        self.synchro_worker = SynchroWorker.instance(
-            self.srv_setting.get("//synchro-worker/@url"),
-            self.srv_setting.get_float("//synchro-worker/@interval", 3600),
-            self.srv_setting.get_boolean("//synchro-worker/@vc_update", False),
-            self.srv_setting.get_boolean("//synchro-worker/@passback", False),
         )
         self.exiting = False
 
@@ -897,7 +752,6 @@ class TestAgent(object):
 
         self.cleanup_worker.start()
         self.execute_worker.start()
-        self.synchro_worker.start()
 
         import signal
         signal.signal(signal.SIGINT, self._sigint_handler)
@@ -910,7 +764,6 @@ class TestAgent(object):
         ioloop.IOLoop.current().stop()
         self.cleanup_worker.stop()
         self.execute_worker.stop()
-        self.synchro_worker.stop()
         logging.info('TestAgent exit success!')
 
     def _try_exit(self):
@@ -931,20 +784,6 @@ def main():
                 'format': DEFAULT_LOG_LAYOUT
             }
         },
-        'filters': {
-            'cleanup': {
-                '()': '__main__.CleanupWorker.LogFilter',
-                'worker_cls': CleanupWorker
-            },
-            'execute': {
-                '()': '__main__.ExecuteWorker.LogFilter',
-                'worker_cls': ExecuteWorker
-            },
-            'synchro': {
-                '()': '__main__.SynchroWorker.LogFilter',
-                'worker_cls': SynchroWorker
-            }
-        },
         'handlers': {
             'console': {
                 'class': 'logging.StreamHandler',
@@ -959,47 +798,25 @@ def main():
                 'maxBytes': 50000000,
                 'backupCount': 10,
             },
-            'file_cleanup': {
+            'file_sqlalchemy': {
                 'class': 'logging.handlers.RotatingFileHandler',
-                'level': 'DEBUG',
+                'level': 'INFO',
                 'formatter': 'verbose',
-                'filename': os.path.join(common.LOG_DIR, "cleanup.log"),
+                'filename': os.path.join(common.LOG_DIR, "sqlalchemy.log"),
                 'maxBytes': 50000000,
                 'backupCount': 10,
-                'filters': ['cleanup'],
-                'delay': 1
-            },
-            'file_execute': {
-                'class': 'logging.handlers.RotatingFileHandler',
-                'level': 'DEBUG',
-                'formatter': 'verbose',
-                'filename': os.path.join(common.LOG_DIR, "execute.log"),
-                'maxBytes': 50000000,
-                'backupCount': 10,
-                'filters': ['execute'],
-                'delay': 1
-            },
-            'file_synchro': {
-                'class': 'logging.handlers.RotatingFileHandler',
-                'level': 'DEBUG',
-                'formatter': 'verbose',
-                'filename': os.path.join(common.LOG_DIR, "synchro.log"),
-                'maxBytes': 50000000,
-                'backupCount': 10,
-                'filters': ['synchro'],
-                'delay': 1
-            },
+            }
         },
         'loggers': {
             'sqlalchemy': {
                 'level': 'DEBUG',
                 'propagate': False,
-                'handlers': ['file_cleanup', 'file_synchro', 'file_execute'],
+                'handlers': ['file_sqlalchemy'],
             }
         },
         'root': {
             'level': 'DEBUG',
-            'handlers': ['console', 'file_srv', 'file_cleanup', 'file_synchro', 'file_execute'],
+            'handlers': ['console', 'file_srv'],
         }
     }
     logging.config.dictConfig(logconf)
