@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <service>
     <!-- https://github.com/kohsuke/winsw -->
-    <id>aperea_srv</id>
-    <name>aperea_srv</name>
-    <description>aperea server</description>
+    <id>husky_srv</id>
+    <name>husky_srv</name>
+    <description>husky server</description>
     <executable>python</executable>
     <startargument>srv.py</startargument>
     <interactive />

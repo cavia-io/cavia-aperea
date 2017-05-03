@@ -33,35 +33,40 @@ TestFixture模式：
     </thead>
     <tbody valign="top">
         <tr>
-            <td>/api/rest/testfixtures</td>
+            <td>/api/rest/testbenches</td>
             <td>GET</td>
-            <td>返回所有testfixtures的名称和状态</td>
+            <td>返回所有testbenches的name, type, state, exclusive和routings</td>
         </tr>
         <tr>
-            <td>/api/rest/testexecutions</td>
+            <td>/api/rest/testrunners</td>
             <td>GET</td>
-            <td>返回所有testexecution的信息，可通过id和state查询参数指定范围。</td>
+            <td>返回所有testrunner的信息，可通过id和state查询参数指定范围。</td>
         </tr>
         <tr>
-            <td>/api/rest/testexecutions</td>
+            <td>/api/rest/testrunners</td>
             <td>POST</td>
-            <td>添加testexecution</td>
+            <td>添加testrunner</td>
         </tr>
         <tr>
-            <td>/api/rest/testexecutions/(id)</td>
+            <td>/api/rest/testrunners/(id)</td>
             <td>GET</td>
-            <td>获取testexecution</td>
+            <td>获取testrunner</td>
         </tr>
         <tr>
-            <td>/api/rest/testexecutions/(id)</td>
+            <td>/api/rest/testrunners/(id)</td>
             <td>PUT</td>
-            <td>在testexecution还未执行时，更新testexecution。<br/>在执行时，支持action查询参数(pause, resume, abort)进行操作。</td>
+            <td>在testrunner还未执行时，更新testrunner。<br/>在执行时，支持action查询参数(pause, resume, abort)进行操作。</td>
         </tr>
         <tr>
-            <td>/api/rest/testexecutions/(id)</td>
+            <td>/api/rest/testrunners/(id)</td>
             <td>DELETE</td>
-            <td>删除testexecution</td>
+            <td>删除testrunner</td>
         </tr>
+        <tr>
+            <td>/api/rest/testhierarchy</td>
+            <td>GET</td>
+            <td>获取指定SVN地址的Python模块和测试用例结构树。</td>
+        </tr>        
     </tbody>
 </table>
 

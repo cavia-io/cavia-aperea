@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<objects xmlns="couping/objects"
+<objects xmlns="coupling/objects"
          xmlns:aop="couping/aop"
          xmlns:ngta="ngta">
 
@@ -13,47 +13,47 @@
     <object id="fixture" class="fixture.magna.NewTestFixture" lazy-init="true">
         <property name="session">
             <object class="fixture.magna.Session" lazy-init="true">
-                <constructor-arg name="resturl" value="http://localhost:8080/magna/rest/"/>
-                <constructor-arg name="username" value="admin"/>
-                <constructor-arg name="password" value="admin"/>
-            </object>
-        </property>
-    </object>
+    <constructor-arg name="resturl" value="http://localhost:8080/magna/rest/"/>
+    <constructor-arg name="username" value="admin"/>
+    <constructor-arg name="password" value="admin"/>
+</object>
+</property>
+        </object>
 
-    <ngta:testrunner id="runner" failfast="false">
-        <ngta:context>
-            <ngta:fixture ref="fixture"/>
-            <ngta:listeners>
-                <list>
-                    <object class="ngta.listener.TestRunnerLogFileInterceptor">
-                        <constructor-arg name="log_dir" ref="output_dir"/>
-                    </object>
-                    <object class="ngta.listener.TestCaseLogFileInterceptor">
-                        <constructor-arg name="log_dir" ref="output_dir"/>
-                    </object>
-                    <object class="ngta.listener.TestResultShelveInterceptor">
-                        <constructor-arg name="filename" value="#{os.path.join(output_dir, 'result.shelve'); requires=os}"/>
-                    </object>
-                </list>
-            </ngta:listeners>
-        </ngta:context>
-        <ngta:testsuites>
-            <ngta:testsuite name="magna.rest.test_project" >
-                <ngta:pym-loader module="cases.magna.rest.test_node" as-testsuite="false">
-                    <ngta:filter>
-                        <ngta:include>TestNodeGetTestCase</ngta:include>
-                    </ngta:filter>
-                    <ngta:define>
-                        <ngta:injection path="TestNodeGetTestCase">
-                            <ngta:parameter name="loop1" value="123"/>
-                            <ngta:parameter name="loop2" value="456"/>
-                            <ngta:parameter name="loop3" value="789"/>
-                        </ngta:injection>
-                    </ngta:define>
-                </ngta:pym-loader>
-            </ngta:testsuite>
-        </ngta:testsuites>
-    </ngta:testrunner>
+<ngta:testrunner id="runner" failfast="false">
+<ngta:context>
+    <ngta:fixture ref="fixture"/>
+    <ngta:listeners>
+        <list>
+            <object class="ngta.listener.TestRunnerLogFileInterceptor">
+                <constructor-arg name="log_dir" ref="output_dir"/>
+            </object>
+            <object class="ngta.listener.TestCaseLogFileInterceptor">
+                <constructor-arg name="log_dir" ref="output_dir"/>
+            </object>
+            <object class="ngta.listener.TestResultShelveInterceptor">
+                <constructor-arg name="filename" value="#{os.path.join(output_dir, 'result.shelve'); requires=os}"/>
+            </object>
+        </list>
+    </ngta:listeners>
+</ngta:context>
+<ngta:testsuites>
+    <ngta:testsuite name="magna.rest.test_project" >
+        <ngta:pym-loader module="cases.magna.rest.test_node" as-testsuite="false">
+            <ngta:filter>
+                <ngta:include>TestNodeGetTestCase</ngta:include>
+            </ngta:filter>
+            <ngta:define>
+                <ngta:injection path="TestNodeGetTestCase">
+                    <ngta:parameter name="loop1" value="123"/>
+                    <ngta:parameter name="loop2" value="456"/>
+                    <ngta:parameter name="loop3" value="789"/>
+                </ngta:injection>
+            </ngta:define>
+        </ngta:pym-loader>
+    </ngta:testsuite>
+</ngta:testsuites>
+</ngta:testrunner>
 
     <str id="report_html">#{os.path.join(output_dir, 'report.html'); requires=os}</str>
     <aop:config>
