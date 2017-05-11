@@ -1,3 +1,6 @@
+#Deprecated
+Merged into https://github.com/yyang179/ngta.
+
 ## 本地执行
 * 为每次执行在./logs目录下生成时间戳目录，用以存放日志、报告、数据库文件。
 * 每个测试用例生成一个日志文件，并针对测试结果进行归类。
